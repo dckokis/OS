@@ -8,6 +8,14 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include "smartArray.h"
+
+typedef struct _FILE {
+    int descriptor;
+    int len;
+    char *content;
+    char* error_message;
+} File;
 
 void closeFile(int fd) {
     int ret = close(fd);
@@ -23,57 +31,37 @@ bool readFile(int file, char *buffer, size_t len) {
     }
     return true;
 }
-
-size_t fileLen(int file) {
-    off_t seekPos = lseek(file, 0, SEEK_END);
+File *fileProcessing(char *filename) {
+    File *file = malloc(sizeof(File));
+    file->descriptor = open(filename, O_RDONLY);
+    off_t seekPos = lseek(file->descriptor, 0, SEEK_END);
     if (seekPos == (off_t) -1) {
-        return -1;
+        file->len = -1;
     }
-    return (int) seekPos + 1;
+    file->len = (int) seekPos + 1;
+    lseek(file->descriptor, 0, SEEK_SET);
+    file->content = (char *) mmap(0, file->len, PROT_READ, MAP_SHARED, file->descriptor, 0);
+    return file;
 }
 
-typedef struct {
-    size_t *storage;
-    size_t amountOfElems;
-    size_t capacity;
-} smartArray;
-
-smartArray *init(size_t size) {
-    smartArray *block = (smartArray *) malloc(sizeof(block));
-    if (block == NULL)
-        return block;
-    block->storage = (size_t *) malloc(size * sizeof(size_t));
-    if (block->storage == NULL) {
-        free(block);
-        return NULL;
+int fileCheck(File *file) {
+    if (file->descriptor == -1) {
+        file->error_message = "File can't be read\n";
+        return 2;
     }
-    block->amountOfElems = 0;
-    block->capacity = size;
-    return block;
-}
-
-bool add(smartArray *vec, size_t elem) {
-    if (vec->amountOfElems == vec->capacity) {
-        vec->capacity *= 2;
-        size_t *data = (size_t *) realloc(vec->storage, vec->capacity * sizeof(size_t));
-        if (data == NULL) {
-            vec->capacity /= 2;
-            return false;
-        }
-        vec->storage = data;
+    if (file->len < 0) {
+        file->error_message = "Failed to seek file\n";
+        return 1;
     }
-    vec->storage[vec->amountOfElems++] = elem;
-    return true;
-}
-
-void destroy(smartArray *vec) {
-    free(vec->storage);
-    vec->storage = NULL;
-    vec->amountOfElems = vec->capacity = 0;
+    if (file->content == NULL) {
+        file->error_message = "Unable to allocate buffer to save file in\n";
+        return 1;
+    }
+    return 0;
 }
 
 bool offsetConstructor(smartArray *offsetArray, const char *buffer, size_t len) {
-    int i = 0;
+    size_t i = 0;
     for (i = 0; i < len; ++i) {
         if (buffer[i] == '\n')
             if (!add(offsetArray, i + 1)) {
@@ -101,49 +89,36 @@ int main(int argc, char **argv) {
         printf("Usage: ./a.out 'filename'\nOr wait for 5 sec to see all text\n");
         return 0;
     }
-    /*open file*/
-    int file = open(argv[1], O_RDONLY);
-    if (file == -1) {
-        printf("File can't be read\n");
-        return 1;
-    }
-    /*file len*/
-    size_t len = fileLen(file);
-    if (len < 0) {
-        printf("Failed to seek file\n");
-        closeFile(file);
-        return 1;
-    }
-    /*read file*/
-    lseek(file, 0, SEEK_SET);
-    char *buffer = (char *) mmap(0, len, PROT_READ, MAP_SHARED, file, 0);
-    if (buffer == NULL) {
-        printf("Unable to allocate buffer to save file in\n");
-        closeFile(file);
-        return 1;
-    }
-    if (!readFile(file, buffer, len)) {
-        closeFile(file);
-        if (munmap(buffer, len) == -1) {
+    File *file = fileProcessing(argv[1]);
+    int err_code = fileCheck(file);
+    if (err_code > 0) {
+        printf("%s", file->error_message);
+        if(err_code == 2) {
+            return 1;
+        }
+        closeFile(file->descriptor);
+        if (munmap(file->content, file->len) == -1) {
             perror("munmap():");
         }
+        free(file);
         return 1;
     }
     /*buffer parsing*/
     smartArray *offsetArray = init(10);
     if (offsetArray == NULL) {
         printf("Memory allocation failed\n");
-        closeFile(file);
-        if (munmap(buffer, len) == -1) {
+        closeFile(file->descriptor);
+        if (munmap(file->content, file->len) == -1) {
             perror("munmap():");
         }
+        free(file);
         return 1;
     }
-    if (!offsetConstructor(offsetArray, buffer, len)) {
+    if (!offsetConstructor(offsetArray, file->content, file->len)) {
         printf("Failed to allocate storage\n");
-        closeFile(file);
+        closeFile(file->descriptor);
         destroy(offsetArray);
-        if (munmap(buffer, len) == -1) {
+        if (munmap(file->content, file->len) == -1) {
             perror("munmap():");
         }
         return 1;
@@ -175,13 +150,17 @@ int main(int argc, char **argv) {
                         begin = offsetArray->storage[strNumber - 2];
                     }
                     end = offsetArray->storage[strNumber - 1];
-                    lseek(file, begin, SEEK_SET);
+                    lseek(file->descriptor, begin, SEEK_SET);
                     char str[255];
-                    size_t lineLen = read(file, str, end - begin);
+                    size_t lineLen = read(file->descriptor, str, end - begin);
                     if (lineLen < 0 && errno != EINTR) {
                         printf("Failed to read line\n");
                         destroy(offsetArray);
-                        closeFile(file);
+                        closeFile(file->descriptor);
+                        if (munmap(file->content, file->len) == -1) {
+                            perror("munmap():");
+                        }
+                        free(file);
                         return 0;
                     }
                     str[end - begin - 1] = '\0';
@@ -190,14 +169,15 @@ int main(int argc, char **argv) {
             }
         }
     }
-    /*else print all*/
+        /*else print all*/
     else {
-        write(STDIN_FILENO, buffer, len);
+        write(STDIN_FILENO, file->content, file->len);
     }
     destroy(offsetArray);
-    if (munmap(buffer, len) == -1) {
+    if (munmap(file->content, file->len) == -1) {
         perror("munmap():");
     }
-    closeFile(file);
+    closeFile(file->descriptor);
+    free(file);
     return 0;
 }

@@ -160,6 +160,7 @@ int main(int argc, char **argv) {
                         printf("Failed to read line\n");
                         destroy(offsetArray);
                         closeFile(file->descriptor);
+                        free(file->content);
                         free(file);
                         return 0;
                     }

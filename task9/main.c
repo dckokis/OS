@@ -3,19 +3,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void execute(char *command_for_child, char *text_for_parent) {
+void execute(char *forChild, char *text_for_parent) {
     pid_t pid = fork();
     switch (pid) {
         case (-1):
             perror("fork() error\n");
             break;
         case (0):
-            if (system(command_for_child) == -1) {
-                perror("Failed to execute command in child process\n");
-            }
+            exit(0);
+//            execlp("cat", "cat", forChild, NULL);
+//            perror("Failed to execute command in child process\n");
             break;
         default:
-            printf("%s", text_for_parent);
+            sleep(30);
+            //while (wait(0) != -1);
+            //printf("%s", text_for_parent);
             break;
     }
 }
@@ -48,8 +50,7 @@ int main(int argc, char *argv[]) {
         perror("Failed to allocate memory for command\n");
         return 1;
     }
-    command = strcat(command, "cat ");
-    command = strcat(command, ch_filename);
-    execute(command, pr_text);
+
+    execute(ch_filename, pr_text);
     return 0;
 }

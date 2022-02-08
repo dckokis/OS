@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(task8 C)
+project(task25 C)
 
 set(CMAKE_C_STANDARD 11)
 
-add_executable(task8 main.c)
+add_executable(task25 main.c)
